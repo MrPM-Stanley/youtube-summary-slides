@@ -18,7 +18,7 @@ YouTube URL → 下載影片+字幕 → (若無字幕) Whisper 語音辨識 → 
 確保以下工具可用：
 
 ```bash
-export PATH="/sessions/optimistic-happy-goodall/.local/bin:$PATH"
+export PATH="$PWD/.local/bin:$PATH"
 # 檢查並安裝
 pip install yt-dlp openai-whisper python-pptx Pillow --break-system-packages -q
 ```
@@ -30,11 +30,13 @@ ffmpeg 應該已經預裝。若沒有：`apt-get install -y ffmpeg`
 使用 yt-dlp 下載影片和字幕。優先下載既有字幕，同時下載影片檔（後續截圖用）。
 
 ```bash
-WORK_DIR="/sessions/optimistic-happy-goodall/yt-work"
+WORK_DIR="$PWD/yt-work"
 mkdir -p "$WORK_DIR"
 
 # 先嘗試取得影片資訊（標題、時長等）
-yt-dlp --print "%(title)s|||%(duration)s|||%(subtitles)s|||%(automatic_captions)s" --no-download "VIDEO_URL"
+# 同時從 URL 中解析出 VIDEO_ID（例如從 https://www.youtube.com/watch?v=dQw4w9WgXcQ 取得 dQw4w9WgXcQ）
+# VIDEO_ID 後續每張投影片的時間戳連結都會用到
+yt-dlp --print "%(title)s|||%(duration)s|||%(id)s|||%(subtitles)s|||%(automatic_captions)s" --no-download "VIDEO_URL"
 
 # 下載影片（720p 以下即可，截圖不需要太高解析度）
 yt-dlp -f "bestvideo[height<=720]+bestaudio/best[height<=720]" \
@@ -128,6 +130,21 @@ ffmpeg -ss 125.5 -i "$WORK_DIR/video.mp4" -frames:v 1 -q:v 2 "$WORK_DIR/screensh
 
 截圖命名建議使用 `screenshot_NNN.jpg`（NNN 對應投影片編號），方便後續對應。
 
+### 截圖在投影片中的呈現規範
+
+影片截圖幾乎都是 16:9 比例，嵌入投影片時必須**嚴格維持 16:9 比例**（寬:高 = 16:9），否則畫面會變形。具體做法是：決定寬度 `imgW` 後，高度一律用 `imgH = imgW * 9 / 16` 計算，絕對不要手動指定不符比例的高度。
+
+截圖建議尺寸為 4.8~5.0 英吋寬（約佔投影片寬度的一半），靠右對齊放置。
+
+文字區和截圖之間需要留出至少 **0.2 吋**的間距，避免文字緊貼截圖邊緣。具體做法：
+
+```
+截圖起始 X = 10（投影片寬）- imgW - 0.25（右邊距）
+文字區寬度 = 截圖起始 X - 文字起始 X - 0.2（間距）
+```
+
+例如：截圖寬 4.875 吋 → 截圖起始 X ≈ 4.875 → 文字起始於 X=0.5 → 文字寬度 = 4.875 - 0.5 - 0.2 = 4.175 吋。
+
 ## 第六步：建立投影片
 
 使用 pptx skill 的方式建立投影片。讀取 pptx skill 的 `pptxgenjs.md` 來了解如何用 PptxGenJS 建立精美投影片。
@@ -139,17 +156,18 @@ ffmpeg -ss 125.5 -i "$WORK_DIR/video.mp4" -frames:v 1 -q:v 2 "$WORK_DIR/screensh
    - 繁體中文標題（精簡的主題句）
    - 3-5 個繁體中文重點摘要
    - 對應的影片截圖（若該段有視覺意義的畫面）
-   - 時間標記（例如 `03:25 - 07:10`）
+   - **YouTube 時間戳連結**：顯示格式為 `MM:SS ~ MM:SS`，其中起始時間是可點擊的超連結，點擊後直接在瀏覽器開啟 YouTube 影片並跳到該時間點播放。連結格式為 `https://www.youtube.com/watch?v=VIDEO_ID&t=XmYs`（例如影片 03:55 處 → `&t=3m55s`）。記得在第二步取得影片資訊時就要保存 VIDEO_ID，後續每張投影片都會用到。
 3. **總結投影片**：全影片的關鍵要點回顧
 
 ### 設計要求
 
 - 所有文字必須使用繁體中文（即使原始影片是其他語言）
-- 截圖放在投影片右側或下方，不要遮擋文字
-- 有截圖的投影片用雙欄佈局（左文右圖）
-- 沒有截圖的投影片用全寬文字佈局
+- 截圖必須維持 16:9 原始比例（`imgH = imgW * 9 / 16`），絕對不可變形
+- 截圖建議寬 4.8~5.0 吋，靠右對齊放置
+- 文字區與截圖之間至少留 0.2 吋間距
+- 有截圖的投影片用雙欄佈局（左文右圖），沒有的用全寬文字佈局
 - 配色要跟影片主題相關，不要用預設的無聊藍色
-- 時間標記用小字放在投影片底部
+- 時間標記用小字放在投影片底部，起始時間必須是可點擊的超連結（連到 YouTube 該時間點）
 
 ### 使用 PptxGenJS 範例
 
@@ -158,19 +176,45 @@ const pptxgen = require("pptxgenjs");
 let pres = new pptxgen();
 pres.layout = 'LAYOUT_16x9';
 
-// 有截圖的投影片
+// ===== 有截圖的投影片 =====
 let slide = pres.addSlide();
+
+// 截圖尺寸計算（嚴格維持 16:9 比例）
+const imgW = 4.875;
+const imgH = imgW * 9 / 16;  // ≈ 2.742，不要手動寫死高度
+const imgX = 10 - imgW - 0.25;  // 靠右對齊
+const imgY = 0.4;
+
+// 文字區寬度 = 截圖起始位置 - 左邊距 - 間距（至少 0.2 吋）
+const textX = 0.5;
+const textW = imgX - textX - 0.2;  // ≈ 4.175
+
 // 左側文字
-slide.addText("投影片標題", { x: 0.5, y: 0.3, w: 5, h: 0.8, fontSize: 28, bold: true, color: "2C3E50" });
+slide.addText("投影片標題", {
+  x: textX, y: 0.3, w: textW, h: 0.7,
+  fontSize: 24, bold: true, color: "2C3E50"
+});
 slide.addText([
-  { text: "• 重點一：說明內容", options: { breakLine: true, fontSize: 14 } },
-  { text: "• 重點二：說明內容", options: { breakLine: true, fontSize: 14 } },
-  { text: "• 重點三：說明內容", options: { fontSize: 14 } }
-], { x: 0.5, y: 1.3, w: 5, h: 3 });
-// 右側截圖
-slide.addImage({ path: "screenshot_001.jpg", x: 5.8, y: 0.5, w: 3.8, h: 2.85 });
-// 底部時間標記
-slide.addText("03:25 - 07:10", { x: 0.5, y: 5.1, w: 3, h: 0.4, fontSize: 10, color: "999999" });
+  { text: "重點一：說明內容", options: { bullet: true, breakLine: true, fontSize: 13 } },
+  { text: "重點二：說明內容", options: { bullet: true, breakLine: true, fontSize: 13 } },
+  { text: "重點三：說明內容", options: { bullet: true, fontSize: 13 } }
+], { x: textX, y: 1.2, w: textW, h: 3.5, valign: "top" });
+
+// 右側截圖（白色背景 + 陰影框）
+slide.addShape(pres.shapes.RECTANGLE, {
+  x: imgX - 0.05, y: imgY - 0.05, w: imgW + 0.1, h: imgH + 0.1,
+  fill: { color: "FFFFFF" },
+  shadow: { type: "outer", color: "000000", blur: 4, offset: 2, opacity: 0.1 }
+});
+slide.addImage({ path: "screenshot_001.jpg", x: imgX, y: imgY, w: imgW, h: imgH });
+
+// 底部 YouTube 時間戳連結
+// VIDEO_ID 在第二步從 URL 中解析取得（例如 "dQw4w9WgXcQ"）
+const startLink = `https://www.youtube.com/watch?v=${VIDEO_ID}&t=3m25s`;
+slide.addText([
+  { text: "03:25", options: { fontSize: 10, color: "3498DB", hyperlink: { url: startLink } } },
+  { text: " ~ 07:10", options: { fontSize: 10, color: "999999" } }
+], { x: 0.5, y: 5.1, w: 3, h: 0.4 });
 
 pres.writeFile({ fileName: "summary.pptx" });
 ```
@@ -180,11 +224,12 @@ pres.writeFile({ fileName: "summary.pptx" });
 1. 確認投影片數量是否約等於影片分鐘數
 2. 確認所有文字都是繁體中文
 3. 確認截圖正確嵌入且不重疊文字
-4. 使用 pptx skill 的 QA 流程檢查視覺品質
+4. 確認每張內容投影片底部的時間戳連結可正確點擊，連結格式為 `https://www.youtube.com/watch?v=VIDEO_ID&t=XmYs`
+5. 使用 pptx skill 的 QA 流程檢查視覺品質
 
 ## 注意事項
 
-- 如果影片很長（>60 分鐘），Whisper 辨識可能需要較長時間，使用 `base` 模型可以加速
+- 如果影片很長（>30 分鐘），Whisper 在純 CPU 環境下可能逾時。建議先提取音訊為 WAV（16kHz mono），再切成 10 分鐘的分段（chunk）分別辨識，最後合併並修正時間偏移（offset = chunk_index × 600 秒）。長影片優先使用 `tiny` 模型以避免逾時
 - yt-dlp 有時需要更新：`pip install -U yt-dlp --break-system-packages`
 - 截圖時避開轉場畫面，選擇穩定且有資訊量的畫面
 - 如果影片是英文或其他語言，所有摘要文字都要翻譯成繁體中文
